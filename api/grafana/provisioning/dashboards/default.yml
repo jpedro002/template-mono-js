@@ -1,0 +1,15 @@
+# Carrega os dashboards versionados de grafana/dashboards/. Editar pela UI é
+# permitido, mas a alteração não persiste no boot seguinte — o arquivo manda.
+apiVersion: 1
+
+providers:
+  - name: api
+    orgId: 1
+    folder: API
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

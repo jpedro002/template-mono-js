@@ -1,0 +1,222 @@
+# Ambiente local — Postgres + MinIO + VictoriaLogs + Grafana.
+#
+# O docker-compose.yml da raiz é produção (Traefik + rede externa do Dokploy) e
+# não deve ganhar serviços de desenvolvimento.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# MinIO: API em :9000, console em :9001 (minioadmin / minioadmin).
+# Observabilidade: Grafana em http://localhost:3003 (login desligado em dev) —
+# logs, métricas e traces na mesma tela.
+# A vmui do VictoriaLogs continua em http://localhost:9428/select/vmui como
+# ferramenta de diagnóstico do próprio coletor — a leitura do dia a dia é o
+# Grafana.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      TZ: America/Fortaleza
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ 'CMD-SHELL', 'pg_isready -U postgres' ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: [ 'CMD', 'mc', 'ready', 'local' ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Cria os buckets, libera leitura anônima só no público, aplica CORS para o
+  # PUT assinado do browser e expira o prefixo tmp/. Roda e sai.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c " mc alias set local http://minio:9000 minioadmin minioadmin && mc mb -p local/app-private local/app-public && mc anonymous set download local/app-public && mc ilm rule add --expire-days 1 --prefix 'tmp/' local/app-private || true; echo '{\"CORSRules\":[{\"AllowedOrigin\":[\"http://localhost:5173\",\"http://localhost:3001\"],\"AllowedMethod\":[\"PUT\",\"GET\",\"HEAD\"],\"AllowedHeader\":[\"content-type\"],\"ExposeHeader\":[\"ETag\"],\"MaxAgeSeconds\":3600}]}' > /tmp/cors.json && mc cors set local/app-private /tmp/cors.json || true; mc cors set local/app-public /tmp/cors.json || true; echo 'buckets prontos' "
+
+  # Cache. Valkey é o fork do Redis mantido pela Linux Foundation e fala o mesmo
+  # protocolo — o `RedisClient` do Bun não vê diferença.
+  #
+  # Só entra em jogo com `CACHE_DRIVER=redis`: o default (`memory`) não abre
+  # conexão nenhuma, então subir este serviço é opcional em dev. Ele existe para
+  # exercitar o driver que roda em produção.
+  #
+  # `--save ''` desliga a persistência: o que está aqui é cache, e recuperar
+  # cache de um dump é ressuscitar dado velho depois de um restart.
+  # `--maxmemory-policy allkeys-lru` faz o servidor descartar as chaves menos
+  # usadas ao encostar no teto, em vez de recusar escrita — a mesma decisão que
+  # o driver de memória toma com `CACHE_MAX_ENTRIES`.
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command:
+      - valkey-server
+      - --save
+      - ''
+      - --appendonly
+      - 'no'
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - '127.0.0.1:6379:6379'
+    healthcheck:
+      test: [ 'CMD', 'valkey-cli', 'ping' ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Coletor de logs. Recebe as linhas JSON que o logger da API escreve no stdout,
+  # para que log (e a trilha de auditoria de escrita) nunca ocupe espaço no banco
+  # da aplicação.
+  #
+  # Em dev a API roda no host, não em container, então o stdout é empurrado por
+  # `bun run dev:logs` (ver scripts/ship-logs.js). Em produção, onde a API roda em
+  # container, quem faz esse trabalho é o log driver do Docker apontando para a
+  # porta syslog do coletor (`-syslog.listenAddr.tcp=:8094`) — sem agente e sem
+  # mudança na aplicação.
+  #
+  # O listener syslog NÃO é habilitado aqui de propósito: ele aceita qualquer
+  # coisa sem autenticação, e em dev não serve para nada além de virar porta
+  # aberta na máquina. A porta HTTP fica presa em 127.0.0.1 pelo mesmo motivo —
+  # ingestão e consulta também não têm autenticação.
+  #
+  # ~50-100 MB de RAM e ~25 MB de disco para 90 dias neste volume de eventos.
+  victorialogs:
+    image: victoriametrics/victoria-logs:latest
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-logs-data
+      - -retentionPeriod=90d
+    ports:
+      - '127.0.0.1:9428:9428' # ingestão HTTP + vmui
+    volumes:
+      - victorialogs-data:/victoria-logs-data
+    # Sem healthcheck: a imagem é construída sobre `scratch` — não há shell,
+    # wget ou curl dentro dela, então qualquer `test:` falha com "executable
+    # file not found" e deixa o container eternamente unhealthy (o que travava
+    # o depends_on do Grafana). Quem depende dele espera apenas o start.
+
+    # Métricas. Ingere OTLP direto da API (`/opentelemetry/v1/metrics`), sem
+    # collector no meio — mesma escolha do log: sem agente.
+    #
+    # `-opentelemetry.usePrometheusNaming` converte nome e rótulo para a convenção
+    # do Prometheus (`http.server.request.duration` em segundos vira
+    # `http_server_request_duration_seconds`). Sem essa flag os nomes chegam com
+    # ponto e toda query precisaria de `{__name__="..."}` — o dashboard versionado
+    # depende dela.
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=90d
+      - -opentelemetry.usePrometheusNaming
+    ports:
+      - '127.0.0.1:8428:8428' # ingestão OTLP + remote write + consulta
+    volumes:
+      - victoriametrics-data:/victoria-metrics-data
+    # Sem healthcheck pelo mesmo motivo do victorialogs: imagem sobre `scratch`,
+    # sem shell e sem wget.
+
+    # Traces. Recebe OTLP/HTTP em :4318 e ainda deriva métricas de span (RED por
+    # operação e grafo de serviço), que manda para o VictoriaMetrics por remote
+    # write — ver tempo/tempo.yml.
+    #
+    # Versão **pinada em 2.x de propósito**: o `latest` já é o Tempo 3, que
+    # reescreveu o caminho de escrita em cima de uma fila Kafka e removeu os
+    # componentes monolíticos (`ingester`, `compactor`) — sobe com "field ingester
+    # not found" e exigiria infraestrutura de fila para um único nó.
+  tempo:
+    image: grafana/tempo:2.10.8
+    restart: unless-stopped
+    command: [ '-config.file=/etc/tempo.yml' ]
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - '127.0.0.1:3200:3200' # consulta (Grafana)
+      - '127.0.0.1:4318:4318' # OTLP/HTTP — em dev a API roda no host
+
+  # Leitura de tudo. O Grafana é só a interface: nada é armazenado nele. Log vai
+  # para o VictoriaLogs pelo plugin `victoriametrics-logs-datasource` (LogsQL
+  # nativo, não é o datasource do Loki), métrica para o VictoriaMetrics pelo
+  # datasource Prometheus e trace para o Tempo.
+  #
+  # Datasource e dashboards vêm provisionados de ./grafana — não há configuração
+  # manual pela UI a ser refeita quando o volume for descartado.
+  #
+  # Porta 3003 no host porque a API de dev ocupa a 3000 e o front a 3001; dentro
+  # do container o Grafana continua na 3000.
+  #
+  # Em dev o login é desligado (anônimo com papel Admin): a máquina é do dev,
+  # tudo está preso em 127.0.0.1 e o coletor por trás também não tem
+  # autenticação — pedir senha aqui só criaria fricção sem proteger nada.
+  grafana:
+    image: grafana/grafana-oss:latest
+    restart: unless-stopped
+    depends_on:
+      - victorialogs
+      - victoriametrics
+      - tempo
+    environment:
+      GF_INSTALL_PLUGINS: victoriametrics-logs-datasource
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_BASIC_ENABLED: 'false'
+      GF_AUTH_DISABLE_LOGIN_FORM: 'true'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_NEWS_NEWS_FEED_ENABLED: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_SERVER_ROOT_URL: http://localhost:3003
+      # Credenciais de fachada: o VictoriaLogs de dev sobe sem -httpAuth e
+      # ignora o header. Existem só para a datasource provisionada (que manda
+      # basic auth por causa da produção) não interpolar variável vazia.
+      VL_AUTH_USER: dev
+      VL_AUTH_PASSWORD: dev
+      TZ: America/Fortaleza
+    ports:
+      - '127.0.0.1:3003:3000'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: [ 'CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1' ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  minio-data:
+  victorialogs-data:
+  victoriametrics-data:
+  tempo-data:
+  grafana-data:

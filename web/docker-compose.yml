@@ -1,0 +1,31 @@
+services:
+  web:
+    build:
+      context: .
+      args:
+        VITE_API_URL: ${VITE_API_URL:?VITE_API_URL obrigatoria (build-time)}
+    image: web:latest
+    container_name: web
+    restart: unless-stopped
+    healthcheck:
+      test: [ 'CMD', 'wget', '-qO-', 'http://127.0.0.1/healthz' ]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'

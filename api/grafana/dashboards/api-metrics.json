@@ -1,0 +1,938 @@
+{
+  "uid": "api-metrics",
+  "title": "API — métricas",
+  "tags": [
+    "api",
+    "metricas",
+    "otel"
+  ],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "HTTP",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Requisições por status",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{http_response_status_code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "Taxa vinda do `_count` do histograma. Requisição que não casou rota não aparece aqui — ela morre antes do `derive` e não tem duração; está no painel de erros por tipo, como `unrouted`.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Latência",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Percentil sobre buckets fixos declarados na aplicação (5 ms a 10 s). Fora dessa faixa o quantil satura no último bucket — é limitação de histograma, não erro de coleta."
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Erros por tipo",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (error_type, http_response_status_code) (rate(app_http_errors_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{error_type}} ({{http_response_status_code}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "`error_type` é o código fechado da Elysia (NOT_FOUND, VALIDATION, PARSE) ou do Prisma (P2002, P2025) — nunca a mensagem, que abriria uma série por variação de texto."
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Rotas mais lentas (p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, http_route, http_request_method) (rate(http_server_request_duration_seconds_bucket[$__rate_interval]))))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{http_request_method}} {{http_route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "`http_route` é o padrão registrado no roteador (`/api/seguranca/users/:id`), não a URL concreta: id na métrica seria uma série por registro."
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Em voo",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(http_server_active_requests)",
+          "editorMode": "code",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "Requisições dentro do processo agora. Sobe e não desce = handler preso."
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Erro 5xx (5 min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(app_http_errors_total{http_response_status_code=~\"5..\"}[5m]))",
+          "editorMode": "code",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Bloqueios de rate limit (5 min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(app_ratelimit_blocked_total[5m]))",
+          "editorMode": "code",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "Balde `login` subindo é sinal de força bruta; balde `global`, de cliente mal-comportado."
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tamanho do corpo recebido (p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 17,
+        "w": 12,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_body_size_bytes_bucket[$__rate_interval])))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "description": "Vem do `content-length` declarado pelo cliente — é o que o servidor aceitou receber, não o que foi lido."
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Banco de dados",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Pool de conexões",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (state) (app_db_pool_connections)",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{state}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max(app_db_pool_max)",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "teto"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(app_db_pool_pending)",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "esperando"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "O recurso escasso da API. `esperando` acima de zero de forma sustentada significa que a latência que o usuário sente é fila de pool — não banco lento, não CPU."
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Prisma: p95 por model e operação",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, db_collection_name, db_operation_name) (rate(app_db_operation_duration_seconds_bucket[$__rate_interval]))))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{db_collection_name}}.{{db_operation_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Operação do Prisma ponta a ponta: inclui espera por conexão, `parseValues` e `adjustTimezone`. É o número que o usuário sente. O tempo puro do SQL está no painel ao lado."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "SQL: p95 por operação (instrumentação do pg)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, db_operation_name) (rate(db_client_operation_duration_seconds_bucket[$__rate_interval])))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{db_operation_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Medido dentro do driver. A diferença entre este painel e o do Prisma é exatamente o custo da camada da aplicação."
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Erros de banco por código",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 30,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (error_type, db_collection_name) (rate(app_db_operation_duration_seconds_count{error_type!=\"\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{error_type}} — {{db_collection_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Código do Prisma (P2002 unique, P2025 não encontrado, P2021 tabela ausente). Consulta que falhou também entra na duração — e é a que mais interessa."
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "Autenticação e autorização",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Login por resultado",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(app_auth_login_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{result}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(app_auth_logout_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "logout"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "`invalid_credentials` é resultado único de propósito: separar \"usuário não existe\" de \"senha errada\" reintroduziria por painel a enumeração de usuários que o hash dummy do login existe para evitar."
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Decisões do RBAC",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 39,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind, result) (rate(app_authz_decision_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{kind}} / {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Qual permissão faltou não está aqui: `authorize` recebe listas arbitrárias e cada lista abriria uma série. O 403 no log carrega o campo `required`."
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Cache de permissões — taxa de acerto",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 39,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(app_authz_cache_total{result=\"hit\"}[$__rate_interval])) / sum(rate(app_authz_cache_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "acerto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "description": "Cada falta custa duas consultas ao banco na requisição. Taxa caindo com tráfego estável significa TTL (5 min) curto demais ou invalidação em excesso."
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Duração das sessões fechadas (p50/p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(app_auth_session_duration_seconds_bucket[$__rate_interval])))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(app_auth_session_duration_seconds_bucket[$__rate_interval])))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Só entra sessão fechada por logout explícito. Quem fecha o browser deixa `logout_at` nulo — o JWT não avisa ninguém quando expira, então essa sessão nunca é medida."
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Eventos de log por nível",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 46,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (level) (rate(app_log_events_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{level}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Taxa de erro sem consultar o banco de logs. Conta o que de fato saiu, depois do corte por `LOG_LEVEL`."
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Storage",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Operações por tipo e resultado",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, result) (rate(app_storage_operation_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{operation}} / {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "`presign` consistentemente acima de `confirm` é upload assinado que ninguém confirmou: sem GC, cada um desses deixa objeto órfão no bucket."
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Bytes por operação e perfil",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 54,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, profile) (rate(app_storage_bytes_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{operation}} / {{profile}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "description": "`download` é contado no início do stream: mede banda comprometida, não entregue — que é o número que aparece na fatura de saída."
+    },
+    {
+      "id": 24,
+      "type": "row",
+      "title": "Processo",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 61,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Memória",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (type) (process_memory_usage_bytes)",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 62,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (mode) (rate(process_cpu_time_seconds_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{mode}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "Derivada do tempo acumulado de CPU: 1 = um núcleo saturado."
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Atraso do event loop",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 62,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(app_runtime_eventloop_lag_seconds)",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Amostrado a cada 1 s: o excedente do agendamento é o tempo que o loop passou preso em trabalho síncrono. É o que separa \"o banco está lento\" de \"o processo está afogado\"."
+    },
+    {
+      "id": 28,
+      "type": "stat",
+      "title": "Uptime",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 69,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(process_uptime_seconds)",
+          "editorMode": "code",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Reiniciou? Compare com a janela do gráfico antes de culpar um deploy."
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "Grafo de serviço — requisições por aresta",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 69,
+        "w": 18,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (client, server) (rate(traces_service_graph_request_total[$__rate_interval]))",
+          "editorMode": "code",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{client}} → {{server}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "Gerado pelo Tempo a partir dos spans (metrics_generator) e escrito aqui por remote write — não há contador para isso na aplicação."
+    }
+  ]
+}

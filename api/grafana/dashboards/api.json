@@ -1,0 +1,136 @@
+{
+  "uid": "api-logs",
+  "title": "API — logs",
+  "tags": ["api", "logs"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Requisições por status",
+      "description": "`| unpack_json` existe para o mesmo painel servir dev e produção: em dev o ship-logs.js entrega campos estruturados, via syslog a linha JSON inteira chega em _msg. Quando _msg não é JSON, unpack_json não faz nada.",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } }, "unit": "reqps" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "statsRange",
+          "expr": "_msg:request | unpack_json | stats by (status) count() as requests",
+          "step": "$__interval",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Latência (ms)",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "statsRange",
+          "expr": "_msg:request | unpack_json | stats quantile(0.5, durationMs) as p50, quantile(0.95, durationMs) as p95, quantile(0.99, durationMs) as p99",
+          "step": "$__interval"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "5xx na janela",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "stats",
+          "expr": "_msg:request | unpack_json | filter status:>=500 | stats count() as erros"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "4xx na janela",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "stats",
+          "expr": "_msg:request | unpack_json | filter status:>=400 status:<500 | stats count() as erros"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Rotas mais lentas (p95)",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "stats",
+          "expr": "_msg:request | unpack_json | stats by (method, path) quantile(0.95, durationMs) as p95, count() as hits | sort by (p95 desc) | limit 20"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "Erros e avisos",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 12 },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "* | unpack_json | filter level:(error or warn)",
+          "maxLines": 500
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Auditoria de escrita (POST/PUT/PATCH/DELETE)",
+      "description": "O campo `body` das mutações — o \"quem alterou o quê\". Chaves sensíveis já saem [REDACTED] do logger; CPF não é redigido de propósito.",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "_msg:request | unpack_json | filter method:(POST or PUT or PATCH or DELETE)",
+          "maxLines": 500
+        }
+      ]
+    }
+  ]
+}

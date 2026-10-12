@@ -1,0 +1,201 @@
+import { Edit, Loader2, Trash2 } from 'lucide-react'
+import { useMemo } from 'react'
+import { Helmet } from 'react-helmet-async'
+import { useNavigate, useSearchParams } from 'react-router'
+import { DeleteConfirmDialog } from 'src/components/delete-confirm-dialog'
+import { GenericTable } from 'src/components/table/table'
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from 'src/components/ui/card'
+import { useDeleteWithConfirmation } from 'src/hooks/use-delete-with-confirmation'
+import { useHeaderConfig } from 'src/hooks/use-header-config'
+import { useTableStateFromUrl } from 'src/hooks/use-table-state-from-url'
+import { toast } from 'src/lib/toast'
+import { use{{entityPascal}}Delete, use{{entityPascal}}List } from 'src/services/{{entityPlural}}'
+
+// A permissão da rota é esta linha, lida pelo plugin de rotas em tempo de
+// build: o elemento gerado já sai embrulhado em <PermissionRoute> **fora** do
+// Suspense, então a página negada nem baixa o chunk. <PermissionRoute> dentro
+// do JSX **falha o build** — dois portões para uma rota é como o comportamento
+// antigo (dispara a query, depois redireciona) volta sem ninguém notar.
+export const permissao = '{{permissionResource}}:read'
+
+const {{entityPascal}}Page = () => {
+	const navigate = useNavigate()
+	const [searchParams] = useSearchParams()
+	const query = searchParams.get('q') || ''
+
+	// 🚀 Hook para sincronizar paginação com a URL (usado para a query da API)
+	const { page, pageSize } = useTableStateFromUrl({ defaultPageSize: 20 })
+
+	const {
+		data: {{entityPluralCamel}}Data,
+		isLoading,
+		isFetching,
+	} = use{{entityPascal}}List({
+		page,
+		pageSize,
+		term: query,
+		fields: ['title'], // TODO: Ajustar campos de busca
+	})
+
+	const deleteMutation = use{{entityPascal}}Delete()
+
+	// Recurso com soft delete na API (`deleted_at`)? Então o DELETE **inativa** e
+	// existe um `PATCH /:id/ativar` para desfazer. Nesse caso, quatro coisas
+	// mudam nesta tela, e nenhuma é opcional:
+	//
+	//   1. `incluir_inativas: mostrarInativos || undefined` na chamada de lista,
+	//      com `const { valores, definir } = useFiltrosDaUrl(['incluir_inativas'])`
+	//      e `const mostrarInativos = valores.incluir_inativas === 'true'`;
+	//   2. um `<Switch>` "Mostrar inativas" — sem ele não há como enxergar o que
+	//      reativar, e inativar vira porta de uma via só;
+	//   3. `situacaoHeader()` nos headers e `ativo: !linha.deleted_at` no map das
+	//      linhas, senão a tabela não distingue ativo de inativo;
+	//   4. o botão Reativar abaixo, e `show` nos dois para cada linha receber só
+	//      a metade que cabe.
+	//
+	// Troque também o texto do diálogo: "não pode ser desfeita" é falso aqui.
+	//
+	// const ativarMutation = use{{entityPascal}}Ativar({
+	// 	onSuccess: () => toast.success('{{entityPascal}} reativado com sucesso!'),
+	// 	onError: (error) =>
+	// 		toast.error(
+	// 			error.response?.data?.message || 'Não foi possível reativar.',
+	// 		),
+	// })
+
+	const deleteConfirmation = useDeleteWithConfirmation(deleteMutation, {
+		title: 'Excluir {{entityPascal}}',
+		getDescription: (item) =>
+			`Tem certeza que deseja excluir "${item.title}"? Esta ação não pode ser desfeita.`,
+		confirmText: 'Sim, excluir',
+		cancelText: 'Cancelar',
+		onSuccess: () => {
+			toast.success('{{entityPascal}} excluído com sucesso!')
+		},
+		onError: (error) => {
+			toast.error(`Erro ao excluir: ${error.message}`)
+		},
+	})
+
+	useHeaderConfig({
+		breadcrumbs: [{ label: '{{entityPascal}}s' }],
+		showSearch: true,
+		createPermission: '{{permissionResource}}:create',
+		newButtonLabel: 'Novo {{entityPascal}}',
+		onNewClick: () => navigate('/{{routePath}}/novo'),
+	})
+
+	// Configuração dos headers da tabela
+	const headers = useMemo(
+		() => [
+			{
+				label: 'Título',
+				field: 'title',
+			},
+			// TODO: Adicionar outros campos
+			{
+				label: 'Criado em',
+				field: 'createdAt',
+				type: 'date',
+			},
+		],
+		[],
+	)
+
+	const actions = useMemo(
+		() => [
+			{
+				label: 'Editar',
+				icon: Edit,
+				permission: '{{permissionResource}}:update',
+				to: (row) => `/{{routePath}}/${row.id}`,
+			},
+			{
+				label: 'Excluir',
+				icon: Trash2,
+				permission: '{{permissionResource}}:delete',
+				variant: 'destructive',
+				// show: (row) => row.ativo, // com soft delete
+				onClick: (row) => deleteConfirmation.confirmDelete(row),
+			},
+			// Com soft delete, descomente — mesma permissão do inativar, porque são
+			// as duas metades do mesmo interruptor e é a mesma que a rota cobra:
+			// {
+			// 	label: 'Reativar',
+			// 	icon: RotateCcw,
+			// 	permission: '{{permissionResource}}:delete',
+			// 	show: (row) => !row.ativo,
+			// 	onClick: (row) => ativarMutation.mutate(row.id),
+			// },
+		],
+		[deleteConfirmation],
+	)
+
+	const {{entityPluralCamel}} = {{entityPluralCamel}}Data?.data || []
+	const rowCount = {{entityPluralCamel}}Data?.pagination?.rowCount || 0
+
+	if (isLoading) {
+		return (
+			<div className="flex items-center justify-center h-96">
+				<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+			</div>
+		)
+	}
+
+	return (
+		<>
+			<Helmet>
+				<title>{{entityPascal}}s</title>
+			</Helmet>
+
+			<div className="space-y-6 gap-4 p-4">
+				{/* Header da Página */}
+				<div className="flex items-center justify-between">
+					<div>
+						<h1 className="text-3xl font-bold tracking-tight">{{entityPascal}}s</h1>
+						<p className="text-muted-foreground">
+							Gerencie os {{entityPlural}} do sistema
+						</p>
+					</div>
+				</div>
+
+				{/* Tabela */}
+				<Card>
+					<CardHeader>
+						<CardTitle>
+							Lista de {{entityPascal}}s
+							{isFetching && (
+								<Loader2 className="ml-2 h-4 w-4 animate-spin inline" />
+							)}
+						</CardTitle>
+						<CardDescription>{rowCount} {{entityPlural}} cadastrados</CardDescription>
+					</CardHeader>
+					<CardContent className="overflow-x-auto">
+						<GenericTable
+							data={ {{entityPluralCamel}} }
+							headers={headers}
+							rowActions={actions}
+							selectableRows={false}
+							pagination={ {
+								pageSize,
+								rowCount,
+								manageUrlState: true,
+							} }
+						/>
+					</CardContent>
+				</Card>
+			</div>
+
+			{/* Dialog de confirmação de exclusão */}
+			<DeleteConfirmDialog {...deleteConfirmation} />
+		</>
+	)
+}
+
+export default {{entityPascal}}Page

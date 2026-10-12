@@ -1,0 +1,151 @@
+model User {
+  id                  String                @id @default(uuid(7))
+  email               String                @unique
+  login               String                @unique @db.VarChar(90)
+  password_hash       String
+  name                String                @db.VarChar(120)
+  active              Boolean               @default(true)
+  deletedAt           DateTime?             @map("deleted_at")
+  requiresRelogin     Boolean               @default(false) @map("requires_relogin")
+  // Assinado no JWT (`tv`). Incrementar invalida todas as sessões abertas do
+  // usuário de uma vez: desativação, troca de senha, "encerrar sessões".
+  tokenVersion        Int                   @default(0) @map("token_version")
+  emailVerifiedAt     DateTime?             @map("email_verified_at")
+  phone               String?               @db.VarChar(20)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  email_change_tokens email_change_tokens[]
+  passwordResetTokens PasswordResetToken[]
+  user_access_history user_access_history[]
+  userPermissions     UserPermission[]
+  userRoles           UserRole[]
+  cards               Card[]
+
+  @@map("users")
+  @@schema("seguranca")
+}
+
+// Recuperação de senha.
+//
+// Só o hash do token é gravado: quem lê o banco não consegue redefinir a senha
+// de ninguém — precisaria do valor original, que só existiu no e-mail. Mesma
+// escolha de `email_change_tokens`.
+model PasswordResetToken {
+  id        String    @id @default(uuid(7))
+  userId    String
+  // sha256 em hexadecimal: 64 caracteres, sempre.
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  // Marcado no uso em vez de apagado: o registro fica como trilha de que a
+  // senha foi redefinida, e o índice único impede reuso do mesmo link.
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+  @@schema("seguranca")
+}
+
+model Role {
+  id              String           @id @default(uuid(7))
+  name            String           @unique
+  description     String?
+  order           Int?
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@map("roles")
+  @@schema("seguranca")
+}
+
+model Permission {
+  id              String           @id @default(uuid(7))
+  identifier      String           @unique
+  name            String
+  description     String?
+  category        String
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+
+  @@map("permissions")
+  @@schema("seguranca")
+}
+
+model UserRole {
+  id         String    @id @default(uuid(7))
+  userId     String
+  roleId     String
+  assignedAt DateTime  @default(now())
+  assignedBy String?
+  expiresAt  DateTime?
+  role       Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+  @@schema("seguranca")
+}
+
+model UserPermission {
+  id           String     @id @default(uuid(7))
+  userId       String
+  permissionId String
+  grantedAt    DateTime   @default(now())
+  grantedBy    String?
+  expiresAt    DateTime?
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@index([userId])
+  @@index([permissionId])
+  @@map("user_permissions")
+  @@schema("seguranca")
+}
+
+model RolePermission {
+  id           String     @id @default(uuid(7))
+  roleId       String
+  permissionId String
+  grantedAt    DateTime   @default(now())
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+  @@schema("seguranca")
+}
+
+// Trilha de auditoria das mudanças de acesso. Sem FK de propósito: a linha
+// precisa sobreviver à exclusão da role, da permissão ou do usuário que cita —
+// auditoria que some junto com o que audita não serve para nada.
+model AuthzAudit {
+  id           String   @id @default(uuid(7))
+  // Quem fez. Nulo só para ações de sistema (seed, script).
+  actorId      String?  @map("actor_id")
+  // `role.assign`, `permission.grant`, `user.sessions.revoke`… ver
+  // `src/services/_auditoria.service.js`.
+  action       String   @db.VarChar(64)
+  targetUserId String?  @map("target_user_id")
+  roleId       String?  @map("role_id")
+  permissionId String?  @map("permission_id")
+  before       Json?
+  after        Json?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([targetUserId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("authz_audit")
+  @@schema("seguranca")
+}

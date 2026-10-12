@@ -1,0 +1,29 @@
+# Métricas. O VictoriaMetrics fala a API de query do Prometheus, então o
+# datasource é o `prometheus` nativo do Grafana — não há plugin envolvido.
+#
+# `httpMethod: POST` porque query de dashboard com muitos rótulos estoura o
+# limite de URL no GET. `timeInterval` bate com o intervalo de push da aplicação
+# (OTEL_METRIC_EXPORT_INTERVAL): informar menos que isso faz o Grafana desenhar
+# degraus falsos entre dois pontos reais.
+apiVersion: 1
+
+datasources:
+  - name: VictoriaMetrics
+    uid: victoriametrics
+    type: prometheus
+    access: proxy
+    url: http://victoriametrics:8428
+    basicAuth: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+      # O VM não é o Prometheus: declarar a variante evita o Grafana tentar
+      # recursos que só existem lá.
+      prometheusType: Prometheus
+      prometheusVersion: 2.53.0
+      exemplarTraceIdDestinations:
+        # O Tempo manda exemplars junto das métricas de span (`send_exemplars`).
+        # Isto é o que transforma um ponto no gráfico em link para o trace.
+        - name: trace_id
+          datasourceUid: tempo
+    editable: false

@@ -1,0 +1,27 @@
+# Datasource provisionada — o Grafana lê este arquivo no boot, não há
+# configuração pela UI (a UI fica somente-leitura para esta datasource).
+#
+# O plugin é o `victoriametrics-logs-datasource` (instalado via
+# GF_INSTALL_PLUGINS no compose). Ele fala LogsQL direto com os endpoints
+# /select/logsql/* — não é o datasource do Loki e não traduz LogQL.
+#
+# `basicAuth` existe por causa da produção, onde o VictoriaLogs roda com
+# -httpAuth.username/password. Em dev o coletor não tem autenticação nenhuma e
+# simplesmente ignora o header — por isso o mesmo arquivo serve aos dois
+# ambientes e o compose de dev passa credenciais de fachada.
+apiVersion: 1
+
+datasources:
+  - name: VictoriaLogs
+    uid: victorialogs
+    type: victoriametrics-logs-datasource
+    access: proxy
+    url: http://victorialogs:9428
+    isDefault: true
+    basicAuth: true
+    basicAuthUser: ${VL_AUTH_USER}
+    secureJsonData:
+      basicAuthPassword: ${VL_AUTH_PASSWORD}
+    jsonData:
+      maxLines: 1000
+    editable: false

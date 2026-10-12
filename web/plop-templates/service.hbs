@@ -1,0 +1,75 @@
+{{#if addCustomMethods}}
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { api } from 'src/lib/axios'
+{{/if}}
+import { createBaseService } from './base/createBaseService'
+
+const BASE_URL = '{{endpoint}}'
+
+// ==========================================
+// 1. GERA A BASE DO SERVICE (CRUD Padrão)
+// ==========================================
+const baseService = createBaseService(BASE_URL, '{{entityPlural}}')
+
+// Extrai o que foi gerado automaticamente
+const {
+	keys: {{entityPluralCamel}}Keys,
+	api: baseApi,
+	useList: use{{entityPascal}}List,
+	useListAll: use{{entityPascal}}ListAll,
+	useGet: use{{entityPascal}},
+	useCreate: use{{entityPascal}}Create,
+	useUpdate: use{{entityPascal}}Update,
+	useDelete: use{{entityPascal}}Delete,
+} = baseService
+
+{{#if addCustomMethods}}
+// ==========================================
+// 2. MÉTODOS CUSTOMIZADOS (Se necessário)
+// ==========================================
+const customApi = {
+	// Exemplo: Método específico desta entidade
+	exemplo: async (id, data) => {
+		const response = await api.post(`${BASE_URL}/${id}/exemplo`, data)
+		return response.data
+	},
+}
+
+// Hooks Customizados
+export function use{{entityPascal}}Exemplo() {
+	const queryClient = useQueryClient()
+	return useMutation({
+		mutationFn: ({ id, data }) => customApi.exemplo(id, data),
+		onSuccess: (_data, { id }) => {
+			// Invalida o cache desta entidade
+			queryClient.invalidateQueries({ queryKey: {{entityPluralCamel}}Keys.detail(id) })
+			queryClient.invalidateQueries({ queryKey: {{entityPluralCamel}}Keys.all })
+		},
+	})
+}
+{{/if}}
+
+// ==========================================
+// 3. EXPORTS
+// ==========================================
+
+// API Methods (caso precise usar diretamente)
+export const {{entityPluralCamel}}Service = {
+	...baseApi,
+{{#if addCustomMethods}}
+	...customApi,
+{{/if}}
+}
+
+// Query Keys (útil para invalidações manuais)
+export { {{entityPluralCamel}}Keys }
+
+// Hooks Base (CRUD)
+export {
+	use{{entityPascal}}List,
+	use{{entityPascal}}ListAll,
+	use{{entityPascal}},
+	use{{entityPascal}}Create,
+	use{{entityPascal}}Update,
+	use{{entityPascal}}Delete,
+}

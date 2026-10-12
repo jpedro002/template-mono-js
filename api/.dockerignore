@@ -1,0 +1,12 @@
+*
+!package.json
+!bun.lock
+!jsconfig.json
+!prisma.config.ts
+!src/
+!scripts/versao.js
+!.git/HEAD
+!.git/refs/heads/
+!.git/packed-refs
+!prisma/
+prisma/generated/

@@ -1,0 +1,373 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      TZ: America/Fortaleza
+      LOG_PRETTY: "false"
+      # Telemetria empurrada pela própria API (push) para o collector, na rede
+      # `observability`. Os dois sinais vão para o MESMO destino — quem separa
+      # métrica de trace, e quem conhece o caminho não-padrão do VictoriaMetrics,
+      # é o collector (ver otel/collector.yml).
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: http://otel-collector:4318/v1/metrics
+      # 100% dos traces saem da API — e isso NÃO é o que vai para o disco do
+      # Tempo. Quem descarta é o `tail_sampling` do collector, depois de saber se
+      # a requisição deu erro e quanto demorou. Baixar este número aqui reintroduz
+      # exatamente o defeito que o collector existe para corrigir: erro e
+      # requisição lenta sorteados fora antes de existirem.
+      OTEL_TRACES_SAMPLER_ARG: "1"
+      # A tela de uso (`GET /api/seguranca/telemetria/uso`) lê a métrica de
+      # volta. Precisa ser EXPLÍCITO: o fallback do settings usa a origem do
+      # endpoint de export, que agora é o collector — e collector não responde
+      # consulta. Sem esta linha a tela responde 503.
+      METRICS_QUERY_URL: http://victoriametrics:8428
+      # Endereço fixo; quem decide se o cache usa Redis é o CACHE_DRIVER no .env.
+      REDIS_URL: redis://valkey:6379
+    expose:
+      - "3000"
+    # Só o start: o collector pronto não é pré-requisito para servir requisição
+    # (telemetria recusada é descartada pelo SDK), mas subir na ordem certa evita
+    # um minuto de export perdido a cada deploy.
+    depends_on:
+      - otel-collector
+    networks:
+      - dokploy-network
+      - cache
+      # Rede privada deste compose, só com os backends de telemetria. É por aqui
+      # que a API empurra OTLP. Diferente da `dokploy-network`, que é
+      # compartilhada por todo app do host, esta só tem quem precisa.
+      - observability
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Quem entrega a linha é o *daemon* do Docker, não o container — por isso o
+    # endereço é 127.0.0.1 (porta publicada pelo victorialogs no host) e não o
+    # nome do serviço: DNS da rede do compose não existe para o daemon.
+    #
+    # non-blocking: coletor lento nunca segura o processo da API; estourou o
+    # buffer, a linha é descartada. Perder log é melhor que travar requisição.
+    #
+    # `docker logs` continua funcionando: o dual logging do daemon mantém um
+    # cache local mesmo com driver remoto.
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "tcp://127.0.0.1:8094"
+        syslog-format: "rfc5424micro"
+        tag: "api"
+        mode: "non-blocking"
+        max-buffer-size: "4m"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.api.rule=Host(`api.seudominio.com`)
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls.certresolver=letsencrypt
+      - traefik.http.services.api.loadbalancer.server.port=3000
+
+  # Cache (Valkey — fork do Redis, mesmo protocolo, mesmo cliente).
+  #
+  # Só é usado quando o `.env` traz `CACHE_DRIVER=redis`; com o default
+  # (`memory`) a API não abre conexão e este container fica ocioso. Vale quando
+  # há mais de uma instância servindo — com uma só, o cache em processo entrega
+  # o mesmo resultado sem rede no caminho.
+  #
+  # Fora da `dokploy-network` pelo mesmo motivo dos backends de telemetria: essa
+  # rede é compartilhada por todo app do host, e Valkey sem `requirepass` nela
+  # seria leitura e escrita livre para qualquer container. Na rede `cache` só
+  # entra a API. Sem porta publicada — nada aqui precisa ser alcançado do host.
+  #
+  # `--save ''` desliga a persistência (cache restaurado de dump é dado velho
+  # ressuscitado) e `allkeys-lru` descarta o menos usado ao encostar no teto, em
+  # vez de recusar escrita.
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command:
+      - valkey-server
+      - --save
+      - ''
+      - --appendonly
+      - 'no'
+      - --maxmemory
+      - ${VALKEY_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - allkeys-lru
+    networks:
+      - cache
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  # Collector de telemetria — recebe OTLP da API e roteia: trace para o Tempo,
+  # métrica para o VictoriaMetrics. Configuração em ./otel/collector.yml.
+  #
+  # POR QUE ELE EXISTE. Não é padronização: é a amostragem por cauda. O SDK
+  # decide o destino do trace no primeiro span, antes de existir resultado — com
+  # 10% de razão, 90% dos 5xx e das requisições lentas iam para o lixo junto com
+  # o tráfego saudável. Aqui a API manda tudo e o collector guarda 100% do que
+  # deu erro ou passou de 2 s, mais 5% do resto.
+  #
+  # De brinde, dois efeitos que sozinhos não justificariam o container: a fila de
+  # retry sai do processo da API (que tem 512 MB) e o batch reduz o número de
+  # requisições HTTP contra os bancos.
+  #
+  # `contrib` e não a imagem `core`: o processor `tail_sampling` só existe na
+  # distribuição contrib. Versão pinada — o collector muda configuração entre
+  # releases menores, e `latest` quebrando no deploy é o pior momento de
+  # descobrir isso.
+  #
+  # Nenhuma porta publicada e fora da `dokploy-network`, pelo mesmo motivo dos
+  # backends: o receiver OTLP não tem autenticação, então quem o alcança injeta
+  # trace e métrica forjados. Só a API fala com ele, pela rede `observability`.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.160.0
+    restart: unless-stopped
+    command: ['--config=/etc/otel/collector.yml']
+    volumes:
+      - ./otel/collector.yml:/etc/otel/collector.yml:ro
+    networks:
+      - observability
+    depends_on:
+      - tempo
+      - victoriametrics
+    # Sem healthcheck, pelo mesmo motivo do VictoriaLogs e do VictoriaMetrics, construídos em `scratch`: a imagem
+    # não tem shell, wget nem curl, então não há como sondar o endpoint de saúde
+    # de dentro do container. Quem depende dele espera apenas o start — e
+    # telemetria recusada nunca derruba requisição.
+    # O tail sampling segura trace inteiro em memória até decidir; o
+    # `memory_limiter` do collector é calibrado em porcentagem deste teto.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Coletor de logs — inclui a trilha de auditoria de escrita (o `body` das
+  # mutações). Log nunca ocupa espaço no banco da aplicação, e a retenção é
+  # declarativa: o VictoriaLogs remove por bloco e devolve o disco, sem cron e
+  # sem DELETE (foi exatamente o DELETE diário que inchou a `request_logs` do
+  # MySQL em 3,3x).
+  #
+  # CONTROLE DE ACESSO — o VictoriaLogs OSS não tem nenhum por padrão. Sem as
+  # medidas abaixo, quem alcança a porta lê a trilha de auditoria inteira (o
+  # `body` das mutações, com login e CPF) e injeta linha forjada, o que destrói
+  # o valor probatório do log. Três camadas, e nenhuma é opcional:
+  #
+  # 1. Portas presas em 127.0.0.1. Publicação Docker cria regra DNAT que passa
+  #    por cima de ufw/firewalld — se o bind virar '9428:9428', o coletor fica
+  #    exposto na internet e o firewall do host não impede.
+  # 2. FORA da dokploy-network. Essa rede é compartilhada por todo app do host:
+  #    qualquer container nela alcançaria `victorialogs:9428` direto, sem passar
+  #    pelo 127.0.0.1. E não há necessidade — quem entrega o log é o daemon do
+  #    Docker, pelo host. Este serviço não fala com nenhum outro container.
+  # 3. Basic auth no HTTP (consulta + vmui). Não cobre a ingestão syslog, que
+  #    não tem autenticação nenhuma (`-syslog.tls*` só criptografa) — é a
+  #    camada 1 que protege a :8094.
+  #
+  # Acesso: Grafana (serviço abaixo) por túnel SSH, nunca Traefik. A vmui fica
+  # como diagnóstico do coletor, pelo mesmo túnel.
+  #
+  # Diferença em relação ao dev: o `/insert/jsonline` do ship-logs.js entrega
+  # campos já estruturados; via syslog a linha JSON inteira chega em `_msg`.
+  # Para filtrar por campo, desempacote na consulta:
+  #
+  #   _msg:~'"method":"POST"' | unpack_json | filter status:>=400
+  victorialogs:
+    image: victoriametrics/victoria-logs:latest
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-logs-data
+      - -retentionPeriod=90d
+      - -syslog.listenAddr.tcp=:8094
+      - -syslog.useLocalTimestamp.tcp
+      - -httpAuth.username=${VL_AUTH_USER:?defina VL_AUTH_USER no .env}
+      - -httpAuth.password=${VL_AUTH_PASSWORD:?defina VL_AUTH_PASSWORD no .env}
+    ports:
+      - '127.0.0.1:8094:8094' # ingestão syslog (log driver do Docker)
+      - '127.0.0.1:9428:9428' # consulta + vmui
+    volumes:
+      - victorialogs-data:/victoria-logs-data
+    # Sem healthcheck: a imagem é construída sobre `scratch` — não há shell,
+    # wget ou curl dentro dela, então qualquer `test:` falha com "executable
+    # file not found" e deixa o container eternamente unhealthy (o que travava
+    # o depends_on do Grafana). Quem depende dele espera apenas o start.
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Métricas. Ingere OTLP do collector e recebe também o remote write do Tempo
+  # (métricas derivadas de span). O log continua sem collector no meio — só a
+  # telemetria do SDK passa por um.
+  #
+  # `-opentelemetry.usePrometheusNaming` converte nome e rótulo para a convenção
+  # do Prometheus (`http.server.request.duration` em segundos vira
+  # `http_server_request_duration_seconds`). O dashboard versionado depende dessa
+  # flag: sem ela os nomes chegam com ponto e nenhuma query casa.
+  #
+  # Mesmas camadas de acesso do victorialogs, e pelo mesmo motivo: porta presa em
+  # 127.0.0.1 e fora da `dokploy-network`. Aqui não há basic auth porque quem
+  # escreve é o collector (OTLP) e o Tempo (remote write), e o VictoriaMetrics
+  # aplicaria a mesma exigência à ingestão — o que quebraria os dois. O que
+  # protege é o bind.
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=90d
+      - -opentelemetry.usePrometheusNaming
+      # Métrica é barata por ponto e caríssima por série. O teto existe para que
+      # um rótulo de alta cardinalidade que passe pela revisão (um id em atributo)
+      # derrube a série nova, não o banco inteiro.
+      - -maxLabelsPerTimeseries=40
+    ports:
+      - '127.0.0.1:8428:8428'
+    volumes:
+      - victoriametrics-data:/victoria-metrics-data
+    networks:
+      - observability
+    # Sem healthcheck: imagem sobre `scratch`, sem shell e sem wget.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Traces. Recebe OTLP/HTTP da API e deriva as métricas de span (RED por
+  # operação e grafo de serviço), que manda para o VictoriaMetrics por remote
+  # write — ver tempo/tempo.yml.
+  #
+  # Versão **pinada em 2.x de propósito**: o `latest` já é o Tempo 3, que
+  # reescreveu o caminho de escrita em cima de uma fila Kafka e removeu os
+  # componentes monolíticos (`ingester`, `compactor`) — sobe com "field ingester
+  # not found" e exigiria infraestrutura de fila para um único nó.
+  #
+  # Nenhuma porta publicada: quem escreve é o collector, por nome na rede
+  # `observability`, e a consulta chega pelo Grafana. Menos superfície que o
+  # coletor de log, que precisa da :8094 publicada para o daemon do Docker.
+  #
+  # ATENÇÃO ao `metrics_generator` (tempo/tempo.yml): ele deriva o grafo de
+  # serviço dos spans que CHEGAM, e agora chega o conjunto amostrado por cauda —
+  # enviesado para erro e lentidão. As arestas do grafo continuam corretas, as
+  # taxas absolutas não. Taxa, erro e latência confiáveis vêm de
+  # `http_server_request_duration_seconds`, que a API mede em 100% das
+  # requisições e não passa por amostragem nenhuma.
+  tempo:
+    image: grafana/tempo:2.10.8
+    restart: unless-stopped
+    command: ['-config.file=/etc/tempo.yml']
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+    networks:
+      - observability
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Leitura de tudo. Não guarda nada: consulta o VictoriaLogs pelo plugin
+  # `victoriametrics-logs-datasource`, o VictoriaMetrics pelo datasource
+  # Prometheus e o Tempo pelo de traces — datasources e dashboards provisionados
+  # de ./grafana.
+  #
+  # As mesmas três camadas do coletor valem aqui, porque a tela mostra
+  # exatamente a trilha de auditoria (o `body` das mutações, com login e CPF):
+  #
+  # 1. Porta presa em 127.0.0.1 — acesso por túnel SSH
+  #    (`ssh -L 3003:127.0.0.1:3003 host`), NUNCA por Traefik. Sem label de
+  #    roteamento de propósito: publicar isso é publicar a auditoria.
+  # 2. FORA da dokploy-network. É a rede compartilhada por todo app do host;
+  #    nela, qualquer container alcançaria o Grafana. Ele só precisa falar com o
+  #    victorialogs, e os dois estão na rede default deste compose.
+  # 3. Login obrigatório. Diferente do VictoriaLogs, o Grafana tem autenticação
+  #    de verdade — mas o usuário anônimo vem ligado em várias receitas prontas,
+  #    então aqui ele é desligado explicitamente.
+  #
+  # A senha de admin é obrigatória: sem GRAFANA_ADMIN_PASSWORD no .env o compose
+  # se recusa a subir, em vez de subir com `admin/admin` numa tela de auditoria.
+  grafana:
+    image: grafana/grafana-oss:latest
+    restart: unless-stopped
+    depends_on:
+      - victorialogs
+      - victoriametrics
+      - tempo
+    networks:
+      # Rede default do compose para alcançar o victorialogs; `observability` para
+      # alcançar métricas e traces. O victorialogs continua fora da segunda: quem
+      # entrega log é o daemon do Docker, pelo host.
+      - default
+      - observability
+    environment:
+      GF_INSTALL_PLUGINS: victoriametrics-logs-datasource
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_NEWS_NEWS_FEED_ENABLED: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      # Root URL do túnel — sem isso os links e o redirect de login apontam para
+      # a porta interna e quebram no navegador do outro lado do SSH.
+      GF_SERVER_ROOT_URL: http://localhost:3003
+      # Credenciais que a datasource provisionada usa para falar com o
+      # -httpAuth do VictoriaLogs. São as mesmas do coletor.
+      VL_AUTH_USER: ${VL_AUTH_USER}
+      VL_AUTH_PASSWORD: ${VL_AUTH_PASSWORD}
+      TZ: America/Fortaleza
+    ports:
+      - '127.0.0.1:3003:3000'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  victorialogs-data:
+  victoriametrics-data:
+  tempo-data:
+  grafana-data:
+
+networks:
+  dokploy-network:
+    external: true
+  # Criada por este compose e por mais ninguém: só a API, os dois backends de
+  # telemetria e o Grafana entram. É o que permite a API empurrar OTLP sem que os
+  # backends fiquem alcançáveis por qualquer container do host.
+  observability:
+    driver: bridge
+  # Só API e Valkey. O cache não tem senha: o isolamento de rede é a proteção.
+  cache:
+    driver: bridge

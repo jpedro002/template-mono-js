@@ -1,0 +1,146 @@
+import { ChevronLeft, FileText } from 'lucide-react'
+import { useState } from 'react'
+import { useNavigate, useParams } from 'react-router'
+import Form from 'src/components/Form/FormWeb'
+import { Button } from 'src/components/ui/button'
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from 'src/components/ui/card'
+import { useHeaderConfig } from 'src/hooks/use-header-config'
+import { toast } from 'src/lib/toast'
+import { use{{entityPascal}}, use{{entityPascal}}Create, use{{entityPascal}}Update } from 'src/services/{{entityPlural}}'
+
+// O schema de validação é gerado automaticamente a partir de `fields`
+// (src/components/Form/buildFormSchema.js). Para regras customizadas,
+// passe `schema={...}` (Zod) no <Form />.
+
+const {{entityPascal}}DetailsPage = () => {
+	const { id } = useParams()
+	const navigate = useNavigate()
+	const isEditing = id !== 'novo'
+	const [isSubmitting, setIsSubmitting] = useState(false)
+
+	useHeaderConfig({
+		breadcrumbs: [
+			{ label: '{{entityPascal}}s', href: '/{{routePath}}' },
+			{ label: isEditing ? 'Editar {{entityPascal}}' : 'Novo {{entityPascal}}' },
+		],
+		showSearch: false,
+	})
+
+	// Buscar dados (se estiver editando)
+	const { data: {{entityCamel}}Data, isLoading: isLoadingData } = use{{entityPascal}}(id, {
+		enabled: isEditing,
+	})
+
+	// Mutations
+	const createMutation = use{{entityPascal}}Create()
+	const updateMutation = use{{entityPascal}}Update()
+
+	// Configuração dos campos do formulário
+	const fields = [
+		{
+			name: 'title',
+			label: 'Título',
+			type: 'text',
+			placeholder: 'Ex: Título do {{entityLower}}',
+			required: true,
+			cols: 6,
+		},
+		// TODO: Adicionar outros campos
+	]
+
+	// Submeter formulário
+	const onSubmit = async (data) => {
+		setIsSubmitting(true)
+		try {
+			// Preparar dados
+			const payload = {
+				title: data.title,
+				// TODO: Adicionar outros campos
+			}
+
+			if (isEditing) {
+				// Atualizar
+				await updateMutation.mutateAsync({ id, data: payload })
+				toast.success('{{entityPascal}} atualizado com sucesso!')
+			} else {
+				// Criar
+				await createMutation.mutateAsync(payload)
+				toast.success('{{entityPascal}} criado com sucesso!')
+			}
+
+			navigate('/{{routePath}}')
+		} catch (error) {
+			toast.error(
+				error.response?.data?.message || 'Erro ao salvar {{entityLower}}',
+			)
+		} finally {
+			setIsSubmitting(false)
+		}
+	}
+
+	if (isLoadingData) {
+		return (
+			<div className="flex items-center justify-center h-96">
+				<div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+			</div>
+		)
+	}
+
+	return (
+		<div className="min-h-full">
+			<div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+				{/* Breadcrumb/Voltar */}
+				<Button
+					variant="ghost"
+					className="mb-6 -ml-2"
+					onClick={() => navigate('/{{routePath}}')}
+				>
+					<ChevronLeft className="h-4 w-4 mr-2" />
+					Voltar para {{entityPascal}}s
+				</Button>
+
+				<div className="space-y-6">
+					{/* Card de Informações */}
+					<Card>
+						<CardHeader>
+							<CardTitle className="flex items-center gap-2">
+								<FileText className="h-5 w-5 text-primary" />
+								{isEditing ? 'Editar {{entityPascal}}' : 'Criar Novo {{entityPascal}}'}
+							</CardTitle>
+							<CardDescription>Preencha as informações do {{entityLower}}</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<Form
+								fields={fields}
+								data={ {{entityCamel}}Data }
+								onSubmit={onSubmit}
+								isLoading={isSubmitting}
+								submitLabel={isSubmitting ? 'Salvando...' : 'Salvar {{entityPascal}}'}
+								showRequiredIndicator={true}
+							/>
+						</CardContent>
+					</Card>
+
+					{/* Botão Cancelar */}
+					<div className="flex justify-start">
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => navigate('/{{routePath}}')}
+						>
+							Cancelar
+						</Button>
+					</div>
+				</div>
+			</div>
+		</div>
+	)
+}
+
+export default {{entityPascal}}DetailsPage

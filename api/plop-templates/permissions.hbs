@@ -1,0 +1,25 @@
+// Permissões para {{modelName}} - {{resourceName}}
+// Padrão: recurso:ação. Lido por `prisma/seed.js` e por `scripts/sync-permissoes.js`.
+
+export const PERMISSIONS = [
+	{
+		identifier: '{{modelPlural}}:create',
+		name: 'Criar {{resourceName}}',
+		category: '{{modelPlural}}'
+	},
+	{
+		identifier: '{{modelPlural}}:read',
+		name: 'Visualizar {{resourceName}}',
+		category: '{{modelPlural}}'
+	},
+	{
+		identifier: '{{modelPlural}}:update',
+		name: 'Atualizar {{resourceName}}',
+		category: '{{modelPlural}}'
+	},
+	{
+		identifier: '{{modelPlural}}:delete',
+		name: 'Deletar {{resourceName}}',
+		category: '{{modelPlural}}'
+	}
+]

@@ -1,0 +1,12 @@
+[test]
+preload = ["./tests/setup.js"]
+coverageSkipTestFiles = true
+coverageReporter = ["text"]
+# `src/instrumentation.js` fica fora porque é fiação de SDK, não lógica: com
+# OTEL_SDK_DISABLED nos testes o arquivo devolve um plugin vazio e o resto do
+# corpo nunca roda. A parte que tem decisão de verdade (redação de atributo de
+# span, coleta das métricas observáveis) mora em helpers testados.
+coveragePathIgnorePatterns = ["tests/**", "prisma/**", "src/instrumentation.js"]
+# Limiar POR ARQUIVO (semântica do Bun). O piso é o rate limit: o callback do
+# setInterval de limpeza não roda dentro de uma suíte.
+coverageThreshold = 0.75

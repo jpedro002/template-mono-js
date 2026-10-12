@@ -1,0 +1,68 @@
+# Tempo — armazenamento de traces.
+#
+# Monolítico e em disco local: é o modo suportado para uma instalação de um nó,
+# e não há objeto S3 no caminho para pagar. Trace é dado de diagnóstico, não
+# registro contábil — perder o bloco do dia é aceitável; perder a auditoria de
+# escrita (que fica no VictoriaLogs) não seria.
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        # Só HTTP. O gRPC não é habilitado porque nada aqui fala gRPC: a API
+        # exporta OTLP/HTTP, e uma porta aberta sem cliente é superfície.
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # Bloco fecha a cada 5 min em vez do default de 30: em dev, esperar meia hora
+  # para o trace ficar consultável faz parecer que nada chegou.
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    # 7 dias. Trace é volumoso e só serve para investigar o que acabou de
+    # acontecer — quem precisa de janela longa consulta log (90 dias) ou métrica
+    # (90 dias), que custam ordens de grandeza menos por evento.
+    block_retention: 168h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+# O Tempo deriva métricas dos próprios spans e as manda para o VictoriaMetrics
+# por remote write. É o que dá RED (taxa, erro, duração) de *cada operação*
+# instrumentada — incluindo as consultas do `pg` — sem escrever um contador para
+# cada uma na aplicação.
+#
+# Custo: mais séries no VM e mais memória no Tempo. Se pesar, remova os
+# processors em `overrides` — nada na aplicação depende disto.
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://victoriametrics:8428/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+
+overrides:
+  defaults:
+    metrics_generator:
+      # `service-graphs` monta o grafo de dependências (API → Postgres);
+      # `span-metrics` gera a latência por span. `local-blocks`, que habilitaria
+      # métricas TraceQL, fica de fora: dobraria o disco por um recurso que
+      # ninguém aqui usa ainda.
+      processors: [service-graphs, span-metrics]

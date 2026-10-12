@@ -1,0 +1,68 @@
+import { Elysia } from 'elysia'
+import { {{modelCamel}}Controller } from 'src/controllers/{{moduleName}}'
+import { baseRouter } from 'src/routes'
+import { authenticate, authorize } from 'src/middleware'
+import { z } from 'zod'
+
+const {{modelName}}CreateSchema = z.object({
+	// TODO: Defina os campos obrigatórios para criação
+	// Exemplo:
+	// name: z.string().min(1, 'Nome é obrigatório'),
+	// description: z.string().optional(),
+})
+
+const {{modelName}}UpdateSchema = z.object({
+	// TODO: Defina os campos opcionais para atualização
+	// Exemplo:
+	// name: z.string().min(1, 'Nome é obrigatório').optional(),
+	// description: z.string().optional(),
+})
+
+const controller = {{modelCamel}}Controller()
+
+const listMiddleware = [authenticate, authorize('{{modelPlural}}:read')]
+const createMiddleware = [authenticate, authorize('{{modelPlural}}:create')]
+const updateMiddleware = [authenticate, authorize('{{modelPlural}}:update')]
+const deleteMiddleware = [authenticate, authorize('{{modelPlural}}:delete')]
+
+export const {{modelCamel}}Routes = new Elysia({ prefix: '/{{modelPlural}}' }).use(
+	baseRouter(controller, {
+		tag: '{{resourceName}}',
+		summary: 'Gerenciamento de {{resourceName}}',
+		entityName: '{{resourceName}}',
+		// Model com `deleted_at`? Descomente, e importe `booleanoDeQuery` de
+		// `src/routes/base.route` junto com o `baseRouter`. Sem isto o registro
+		// inativado some de toda listagem e não há como enxergar o que reativar.
+		// listQuery: { incluir_inativas: booleanoDeQuery.optional() },
+		listMiddleware: listMiddleware,
+		getMiddleware: listMiddleware,
+		postMiddleware: createMiddleware,
+		putMiddleware: updateMiddleware,
+		deleteMiddleware: deleteMiddleware,
+		schemas: {
+			createSchema: {{modelName}}CreateSchema,
+			updateSchema: {{modelName}}UpdateSchema,
+			entitySchema: z.any()
+		}
+	})
+)
+
+// Model com `deleted_at`? Então o `DELETE` é soft delete e precisa do desfazer,
+// senão inativar vira porta de uma via só. Encadeie no `.use(...)` acima:
+//
+// .patch('/:id/ativar', controller.ativar, {
+//   // Mesmo middleware do DELETE: são as duas metades do mesmo interruptor, e
+//   // quem pode desligar tem de poder religar.
+//   beforeHandle: deleteMiddleware,
+//   params: z.object({ id: idSchema }),
+//   response: { 200: z.object({ data: z.any() }), 404: z.any(), 422: z.any() },
+//   detail: { tags: ['{{resourceName}}'], summary: 'Reativar {{resourceName}}' }
+// })
+
+// TODO: Adicione rotas customizadas aqui se necessário
+// Exemplo:
+// {{modelCamel}}Routes.post('/custom', controller.customMethod, {
+//   beforeHandle: createMiddleware,
+//   body: z.object({ ... }),
+//   detail: { tags: ['{{resourceName}}'], summary: 'Rota customizada' }
+// })

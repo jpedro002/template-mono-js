@@ -1,0 +1,16 @@
+model Card {
+  id          String   @id @default(uuid(7))
+  title       String
+  description String?
+  // Dono do registro — é o que a política de `cards` usa para decidir quem
+  // edita e exclui (ver `src/policies/cards.policy.js`). Excluir o usuário não
+  // apaga o card: ele só fica sem dono.
+  createdById String?  @map("created_by_id")
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([createdById])
+  @@map("cards")
+  @@schema("public")
+}

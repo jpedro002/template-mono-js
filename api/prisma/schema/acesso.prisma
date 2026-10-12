@@ -1,0 +1,35 @@
+// Tokens de troca/verificação de e-mail e histórico de sessão.
+// Só o hash do token é gravado: quem lê o banco não consegue confirmar o e-mail
+// de ninguém — precisaria do valor original, que só existiu na mensagem.
+model email_change_tokens {
+  id         BigInt    @id @default(autoincrement())
+  new_email  String    @db.VarChar(255)
+  token_hash String    @db.VarChar(64)
+  expires_at DateTime  @db.Timestamp(0)
+  created_at DateTime? @db.Timestamp(0)
+  updated_at DateTime? @db.Timestamp(0)
+  user_id    String
+  users      User      @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@schema("seguranca")
+}
+
+// Histórico de login/logout. O JWT é stateless: o `jti` assinado no login é o
+// que fecha a linha no logout.
+model user_access_history {
+  id               BigInt    @id @default(autoincrement())
+  jti              String?   @db.VarChar(36)
+  login_at         DateTime  @db.Timestamp(0)
+  logout_at        DateTime? @db.Timestamp(0)
+  session_duration Int?
+  created_at       DateTime? @db.Timestamp(0)
+  updated_at       DateTime? @db.Timestamp(0)
+  user_id          String?
+  users            User?     @relation(fields: [user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([login_at], map: "user_access_history_login_at_index")
+  @@index([jti], map: "user_access_history_jti_index")
+  @@index([user_id])
+  @@schema("seguranca")
+}

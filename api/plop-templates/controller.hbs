@@ -1,0 +1,50 @@
+import { baseController } from 'src/controllers'
+
+function {{modelCamel}}Controller() {
+	const select = {
+		id: true,
+		// TODO: Adicione campos do modelo que deseja retornar
+		createdAt: true,
+		updatedAt: true
+	}
+
+	// Use baseController para CRUD padrão
+	const base = baseController('{{modelName}}', { select })
+
+	// Model com `deleted_at`? Então troque o bloco acima por este par — e **não**
+	// por `softDelete: true`: o filtro do baseController é incondicional, a flag
+	// de query nunca chega a ser lida e o registro inativado fica sem caminho
+	// nenhum na tela. Era assim em todos os cadastros de organização até a onda
+	// de reativação. Não esqueça `deleted_at: true` no `select`: sem ele a
+	// listagem não distingue ativo de inativo.
+	//
+	// import { ativacaoDe, leituraComInativos } from './_ativacao.js'
+	//
+	// const base = baseController('{{modelName}}', {
+	// 	select,
+	// 	softDelete: false,
+	// 	where: leituraComInativos('incluir_inativas')
+	// })
+	//
+	// const { del, ativar } = ativacaoDe('{{modelName}}', {
+	// 	select,
+	// 	mensagens: {
+	// 		naoEncontrado: '{{resourceName}} não localizado.',
+	// 		jaAtivo: 'O {{resourceName}} já está ativo.'
+	// 	}
+	// })
+	//
+	// A rota ganha `listQuery` e `PATCH /:id/ativar` junto — ver `route.hbs`.
+
+	// TODO: Adicione métodos customizados aqui se o CRUD base não atender
+	// Exemplo:
+	// const customMethod = async ({ body, params, query, user }) => { ... }
+
+	return {
+		...base // Herda: all, fetch, one, post, put, del
+		// del, ativar // Descomente junto com o par de reativação acima
+		// customMethod // Adicione aqui se criar
+	}
+}
+
+export { {{modelCamel}}Controller }

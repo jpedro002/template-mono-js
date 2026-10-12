@@ -1,0 +1,132 @@
+# OpenTelemetry Collector — fica entre a API e os dois backends de telemetria.
+#
+# Ele existe por UM motivo que nenhum ajuste de env resolve: **amostragem por
+# cauda**. Com `OTEL_TRACES_SAMPLER_ARG=0.1` no SDK a decisão é tomada no
+# primeiro span, antes de existir resultado — então 90% dos 5xx e das
+# requisições lentas eram descartados junto com o resto. Aqui a API manda 100%
+# dos traces e quem decide é o `tail_sampling`, já sabendo se a requisição deu
+# erro e quanto demorou.
+#
+# O log NÃO passa por aqui: continua indo do daemon do Docker direto para o
+# VictoriaLogs por syslog. Um sinal a menos no caminho crítico.
+
+receivers:
+  otlp:
+    protocols:
+      # gRPC é o caminho da API: um stream, sem handshake HTTP por lote.
+      grpc:
+        endpoint: 0.0.0.0:4317
+      # HTTP fica para quem não fala gRPC (um script, um teste manual).
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Teto de memória ANTES de qualquer buffer. O tail sampling segura trace
+  # inteiro em RAM até decidir; sem este processor um pico de tráfego mata o
+  # container por OOM e o Docker reinicia perdendo tudo que estava em voo.
+  # Estourou o limite, o collector recusa o lote e o SDK da API descarta —
+  # telemetria perdida, requisição intacta.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+
+  # Decide o destino do trace quando ele termina, não quando começa.
+  #
+  # As políticas são avaliadas em OR: basta uma casar para o trace ser mantido.
+  # `decision_wait` é quanto se espera após o primeiro span antes de decidir —
+  # requisição mais lenta que isso é julgada incompleta e cai na política de
+  # latência de qualquer forma, que é o que se quer.
+  #
+  # `num_traces` é o teto de traces em voo na memória. 50k a ~2 KB por trace é
+  # da ordem de 100 MB — cabe no limite do container com folga para o resto.
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 200
+    policies:
+      # 1. Todo trace com span em erro. É o que o sampler de cabeça jogava fora.
+      - name: erros
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+
+      # 2. Todo 5xx, inclusive o que não marcou o span como ERROR (o handler de
+      #    erro pode responder 500 sem levantar exceção no span raiz).
+      - name: http-5xx
+        type: numeric_attribute
+        numeric_attribute:
+          key: http.response.status_code
+          min_value: 500
+          max_value: 599
+
+      # 3. Toda requisição acima de 2 s. O p99 saudável da API é uma ordem de
+      #    grandeza abaixo disso; o que passa daqui é o que se quer investigar.
+      - name: lentas
+        type: latency
+        latency:
+          threshold_ms: 2000
+
+      # 4. Uma fatia do tráfego normal, para haver linha de base com que
+      #    comparar. 5% e não 10%: o que interessa agora chega pelas três
+      #    políticas acima, então o resto pode ser mais magro que antes.
+      - name: amostra-do-resto
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 5
+
+  # Agrupa antes de sair. Vem DEPOIS do tail sampling de propósito: agrupar
+  # antes só encheria o lote de trace que seria descartado.
+  batch:
+    timeout: 5s
+    send_batch_size: 8192
+    send_batch_max_size: 16384
+
+exporters:
+  # Traces → Tempo. OTLP/HTTP porque o tempo.yml só habilita o receiver HTTP.
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      # Além disso o lote é descartado. Mesma escolha do resto da telemetria:
+      # backend fora do ar não pode virar pressão de memória no collector.
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+
+  # Métricas → VictoriaMetrics. O caminho NÃO é o OTLP padrão (`/v1/metrics`):
+  # o VictoriaMetrics expõe a ingestão OTLP em `/opentelemetry`, e o exporter
+  # acrescenta `/v1/metrics` ao endpoint configurado.
+  otlphttp/victoriametrics:
+    endpoint: http://victoriametrics:8428/opentelemetry
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlphttp/tempo]
+    metrics:
+      receivers: [otlp]
+      # Métrica não passa por amostragem: é agregada, descartar ponto falsifica
+      # o número. Só limite de memória e lote.
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/victoriametrics]

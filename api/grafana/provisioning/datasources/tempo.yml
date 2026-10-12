@@ -1,0 +1,24 @@
+# Traces.
+#
+# `tracesToLogs`/`tracesToMetrics` não são configurados de propósito: o correlato
+# de log aqui é o `app.request.id` no span (o mesmo `reqId` do log de acesso),
+# e a busca por atributo já faz esse trabalho sem depender de o Grafana adivinhar
+# um mapeamento de rótulos.
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      # Grafo de dependências desenhado a partir das métricas que o próprio Tempo
+      # gera e escreve no VictoriaMetrics (metrics_generator).
+      serviceMap:
+        datasourceUid: victoriametrics
+      nodeGraph:
+        enabled: true
+      streamingEnabled:
+        search: true
+    editable: false
